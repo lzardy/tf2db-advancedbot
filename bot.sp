@@ -12,7 +12,6 @@
 /* ConVars */
 Handle g_botName = null;
 Handle g_percentVote = null;
-Handle g_hCvarVoteTime;
 Handle g_hCvarVoteTimeDelay;
 Handle g_hMinReactionTime;
 Handle g_hMaxReactionTime;
@@ -68,12 +67,15 @@ char g_strClientChatColor[256];
 char g_strBeatableBotMode[256];
 char g_strUnbeatableBotMode[256];
 
+// botclasses
+char botClassesConfigs[24][32];
+
 public Plugin myinfo =
 {
 	name = "Advanced bot",
 	author = "soul & modifications by DeadSworn",
 	description = "Advanced bot (orbit)",
-	version = "v1.8.1",
+	version = "v1.9.0",
 	url = ""
 };
 
@@ -82,7 +84,6 @@ public void OnPluginStart() {
 	
 	g_percentVote = CreateConVar("sm_percentageVotes", "50.0", "Needed percentage to activate the superbot", _, true, 0.0, true, 100.0);
 	g_hCvarVoteTimeDelay = CreateConVar("sm_bot_vote_delay", "60.0", "Time in seconds before players can initiate another PvB vote.", 0);
-	g_hCvarVoteTime = CreateConVar("sm_bot_vote_time", "25.0", "Time in seconds the vote menu should last.", 0);
 	
 	g_hMinReactionTime = CreateConVar("sm_bot_reacttime_min", "125.0", "Fastest the bot can react to the rocket being airblasted, DEFAULT: 125 milliseconds.", FCVAR_PROTECTED, true, 0.00, true, 225.00);
 	MinReactionTime = GetConVarFloat(g_hMinReactionTime);
@@ -147,14 +148,175 @@ public void OnPluginStart() {
 
 	RegAdminCmd("sm_pvb", Command_PVB, ADMFLAG_ROOT, "Enable PVB");
 	RegAdminCmd("sm_scary", Command_ScaryPlayer, ADMFLAG_ROOT, "Make rockets scared of you!");
-	RegAdminCmd("sm_botmode", Command_BotModeToggle, ADMFLAG_ROOT, "Toggle bot mode (ex: from Unbeatable -> Beatable or vice-versa)");
+	RegAdminCmd("sm_bot", Command_BotMenu, ADMFLAG_ROOT, "Bot Menu lol");
 
 	RegConsoleCmd("sm_votepvb", Command_VotePVB, "Vote for the PVB");
 
 	// create the bot config (tf/cfg/sourcemod/superbot.cfg)
 	AutoExecConfig(true, "superbot");
+	
+	// get botclasses configs
+	BuildBotClassConfigs();
 }
 
+bool ChangeConfig(const char[] configName) {
+	KeyValues kv = new KeyValues("BotClasses");
+
+	char path[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, path, sizeof(path), "configs/botclasses.cfg");
+	
+	kv.ImportFromFile(path);
+	
+	// no root node traversal, straight to target node
+	if(!kv.JumpToKey(configName)) {
+		LogError("[BotClasses] Couldn't change to config name: %s", configName);
+		// target node doesn't exist
+		delete kv;
+		return false;
+    }
+ 	
+	bool invincible = kv.GetNum("invincible", 1) == 1;
+ 	
+ 	char flick_chances[64];
+ 	kv.GetString("flick_chances", flick_chances, sizeof(flick_chances), "25.0 37.5 7.5 7.5 7.5 7.5 7.5");
+ 	char flick_chances_cqc[64];
+ 	kv.GetString("flick_chances_cqc", flick_chances_cqc, sizeof(flick_chances_cqc), "10.0 7.5 22.5 22.5 7.5 7.5 22.5");
+	
+	float orbit_chances = kv.GetFloat("orbit_chances", 2.0);
+	
+	float max_orbit_speed = kv.GetFloat("orbit_speed", 200.0);
+	
+	float orbit_max = kv.GetFloat("orbit_max", 0.5);
+	float orbit_min = kv.GetFloat("orbit_min", 0.0);
+
+	char bot_name[64];
+ 	kv.GetString("bot_name", bot_name, sizeof(bot_name), "Default");
+ 	
+ 	SetConVarBool(g_hBeatableBot, invincible);
+ 	IsBotBeatable = GetConVarBool(g_hBeatableBot);
+ 	
+ 	SetConVarString(g_hFlickChances, flick_chances);
+ 	GetConVarArray(g_hFlickChances, FlickChances, sizeof(FlickChances));
+ 	SetConVarString(g_hCQCFlickChances, flick_chances_cqc);
+ 	GetConVarArray(g_hCQCFlickChances, CQCFlickChances, sizeof(CQCFlickChances));
+ 	
+ 	SetConVarFloat(g_hOrbitChance, orbit_chances);
+ 	OrbitChance = GetConVarFloat(g_hOrbitChance);
+ 	SetConVarFloat(g_hMaxOrbitSpeed, max_orbit_speed);
+ 	MaxOrbitSpeed = GetConVarFloat(g_hMaxOrbitSpeed);
+ 	
+ 	SetConVarFloat(g_hMaxOrbitTime, orbit_max);
+ 	MaxOrbitTime = GetConVarFloat(g_hMaxOrbitTime);
+ 	SetConVarFloat(g_hMinOrbitTime, orbit_min);
+ 	MinOrbitTime = GetConVarFloat(g_hMinOrbitTime);
+ 	
+ 	SetConVarString(g_botName, bot_name);
+ 	SetClientName(bot, bot_name);
+ 	
+	delete kv;
+
+	return true;
+}
+
+bool BuildBotClassConfigs() {
+	KeyValues kv = new KeyValues("BotClasses");
+	
+	char path[PLATFORM_MAX_PATH]; 
+	BuildPath(Path_SM, path, sizeof(path), "configs/botclasses.cfg");
+	
+	if(!kv.ImportFromFile(path)) {
+		LogError("[BotClasses] Couldnt find botclasses.cfg in sourcemod/configs.");
+		// Could not find config
+		delete kv;
+		return false;
+	}
+    
+	if(!kv.GotoFirstSubKey()) {
+		LogError("[BotClasses] Root node could not be found (BotClasses), cannot read config.");
+		// could not find a root node
+		delete kv;
+		return false;
+	}
+	
+	char sectionName[32];
+	int i = 0;
+	
+	do { 
+		kv.GetSectionName(sectionName, sizeof(sectionName));
+		Format(botClassesConfigs[i], sizeof(botClassesConfigs[]), sectionName);
+		i++;
+	} while(kv.GotoNextKey());
+	
+	
+	delete kv;
+ 
+	return true;
+}
+
+public Action Command_BotMenu(int client, int args)
+{
+	Menu menu = new Menu(Bot_Handler, MENU_ACTIONS_ALL);
+	
+	menu.SetTitle("Bot Admin Menu");
+	
+	menu.AddItem("0", "BotClasses");
+	menu.ExitButton = true;
+	menu.Display(client, MENU_TIME_FOREVER);
+	
+	return Plugin_Handled;
+}
+
+public int Bot_Handler(Menu menu, MenuAction action, int param1, int param2)
+{
+	switch (action)
+	{
+		case MenuAction_Select:
+		{
+			char sInfo[32];
+			menu.GetItem(param2, sInfo, sizeof(sInfo));
+			
+			switch (param2)
+			{
+				case 0:
+				{
+					DrawBotClassesMenu(param1);
+				}
+			}
+		}			
+	}
+}
+
+void DrawBotClassesMenu(int client)
+{
+	Menu menu = new Menu(BotClass_Handler, MENU_ACTIONS_ALL);
+	
+	menu.SetTitle("Set Bot Class");
+	
+	for(int i = 0; i < sizeof(botClassesConfigs); i++) {
+		if(StrEqual(botClassesConfigs[i], NULL_STRING)) {
+			break;
+		}
+		
+		menu.AddItem(botClassesConfigs[i], botClassesConfigs[i]);
+	}
+	
+	menu.ExitButton = true;
+	menu.Display(client, MENU_TIME_FOREVER);
+}
+
+public int BotClass_Handler(Menu menu, MenuAction action, int param1, int param2)
+{
+	switch (action)
+	{
+		case MenuAction_Select:
+		{
+			char sInfo[32];
+			menu.GetItem(param2, sInfo, sizeof(sInfo));
+			CPrintToChatAll("%s %s%N %schanged the bot's class to %s%s", g_strServerChatTag, g_strClientChatColor, param1, g_strMainChatColor, g_strKeywordChatColor, sInfo);
+			ChangeConfig(sInfo);
+		}			
+	}
+}
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
@@ -250,51 +412,25 @@ public Action Command_VotePVB(int client, int args) {
 	} else if (bVoted[client] && IsValidClient(client)) {
 		CPrintToChat(client, "%s %s%N %syou can't vote twice!", g_strServerChatTag, g_strClientChatColor, client, g_strMainChatColor);
 	}
-	if (iVotes >= iNeededVotes) {
-		StartPvBVotes();
+	if (iVotes >= iNeededVotes) 
+	{
+		if (!botActivated) 
+		{
+			CPrintToChatAll("%s %sPlayer vs Bot is now %sactivated%s!", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strMainChatColor);
+			EnableMode();
+		}
+		else 
+		{
+			CPrintToChatAll("%s %sPlayer vs Bot is now %sdisabled%s!", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strMainChatColor);
+			DisableMode();
+		}
+		AllowedVote = false;
+		ResetPvBVotes();
+		CreateTimer(GetConVarFloat(g_hCvarVoteTimeDelay), Timer_Delay, _, TIMER_FLAG_NO_MAPCHANGE);		
 		bVoted[client] = false;
 		iVotes = 0;
 	}
 	return Plugin_Handled;
-}
-
-StartPvBVotes()
-{
-	PvBVoteMenu();
-	
-	ResetPvBVotes();
-	AllowedVote = false;
-	CreateTimer(GetConVarFloat(g_hCvarVoteTimeDelay), Timer_Delay, _, TIMER_FLAG_NO_MAPCHANGE);
-}
-
-public Action Timer_Delay(Handle timer)
-{
-	AllowedVote = true;
-}
-
-PvBVoteMenu()
-{
-	if (IsVoteInProgress()) return;
-	
-	Handle vm = CreateMenu(PvBVoteMenuHandler, MenuAction:MENU_ACTIONS_ALL);
-	SetVoteResultCallback(vm, Handle_VoteResults);
-	
-	if (!botActivated)
-	{
-		SetMenuTitle(vm, "Set Bot Mode:");
-		AddMenuItem(vm, "beatable", g_strBeatableBotMode);
-		AddMenuItem(vm, "unbeatable", g_strUnbeatableBotMode);
-	}
-	else
-	{
-		SetMenuTitle(vm, "Set Bot Mode/Disable Bot:");
-		AddMenuItem(vm, "beatable", g_strBeatableBotMode);
-		AddMenuItem(vm, "unbeatable", g_strUnbeatableBotMode);
-		AddMenuItem(vm, "disable", "Disable");
-	}
-	
-	SetMenuExitButton(vm, false);
-	VoteMenuToAll(vm, GetConVarInt(g_hCvarVoteTime));
 }
 
 ResetPvBVotes()
@@ -303,6 +439,13 @@ ResetPvBVotes()
 	for (new i = 1; i <= MAXPLAYERS; i++) bVoted[i] = false;
 }
 
+public Action Timer_Delay(Handle timer)
+{
+	AllowedVote = true;
+}
+
+
+
 public OnMapEnd()
 {
 	MapChanged = true;
@@ -310,7 +453,6 @@ public OnMapEnd()
 
 public OnMapStart()
 {
-	ResetPvBVotes();
 	AllowedVote = true;
 	
 	CreateTimer(5.0, Timer_MapStart);
@@ -321,74 +463,6 @@ public Action Timer_MapStart(Handle timer)
 	MapChanged = false;
 }
 
-public PvBVoteMenuHandler(Handle menu, MenuAction:action, client, param2)
-{
-	if (action == MenuAction_End) CloseHandle(menu);
-}
-
-public Handle_VoteResults(Handle menu, num_votes, num_clients, const client_info[][2], num_items, const item_info[][2])
-{
-	int winner = 0;
-	if (num_items > 1 && (item_info[0][VOTEINFO_ITEM_VOTES] == item_info[1][VOTEINFO_ITEM_VOTES]))
-	{
-		winner = GetRandomInt(0, 1);
-	}
-	
-	char winInfo[32];
-	GetMenuItem(menu, item_info[winner][VOTEINFO_ITEM_INDEX], winInfo, sizeof(winInfo));
-	
-	if (!botActivated)
-	{
-		if (StrEqual(winInfo, "beatable"))
-		{
-			CPrintToChatAll("%s %s %sPlayer vs Bot is now %sactivated!", g_strServerChatTag, g_strBeatableBotMode, g_strMainChatColor, g_strKeywordChatColor);
-			IsBotBeatable = true;
-			EnableMode();
-		}
-		else
-		{
-			CPrintToChatAll("%s %s %sPlayer vs Bot is now %sactivated!", g_strServerChatTag, g_strUnbeatableBotMode, g_strMainChatColor, g_strKeywordChatColor);
-			IsBotBeatable = false;
-			EnableMode();
-		}
-	}
-	else
-	{
-		if (StrEqual(winInfo, "beatable"))
-		{
-			if (!IsBotBeatable)
-			{
-				CPrintToChatAll("%s %s %sPlayer vs Bot is now %sactivated!", g_strServerChatTag, g_strBeatableBotMode, g_strMainChatColor, g_strKeywordChatColor);
-				IsBotBeatable = true;
-			}
-			else
-			{
-				CPrintToChatAll("%s %s %sBot Mode is %sstill activated.", g_strServerChatTag, g_strBeatableBotMode, g_strMainChatColor, g_strKeywordChatColor);
-			}
-		}
-		else if (StrEqual(winInfo, "unbeatable"))
-		{
-			if (IsBotBeatable)
-			{
-				CPrintToChatAll("%s %s %sPlayer vs Bot is now %sactivated!", g_strServerChatTag, g_strUnbeatableBotMode, g_strMainChatColor, g_strKeywordChatColor);
-				IsBotBeatable = false;
-				if (IsPlayerAlive(bot))
-				{
-					SDKHook(bot, SDKHook_OnTakeDamage, OnTakeDamage);
-				}
-			}
-			else
-			{
-				CPrintToChatAll("%s %s %sBot Mode is%s still activated.", g_strServerChatTag, g_strUnbeatableBotMode, g_strMainChatColor, g_strKeywordChatColor);
-			}
-		}
-		else
-		{
-			CPrintToChatAll("%s %sPlayer vs Bot is now%s disabled!", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
-			DisableMode();
-		}
-	}
-}
 
 public Action Command_ScaryPlayer(int client, int args)
 {
@@ -408,24 +482,6 @@ public Action Command_ScaryPlayer(int client, int args)
   return Plugin_Handled;
 }
 
-public Action Command_BotModeToggle(int client, int args)
-{
-	if (IsValidClient(client))
-	{
-		if (!botActivated)
-		{
-			CReplyToCommand(client, "%s %sUnable to change Bot Mode because PvB is %sdisabled.", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
-		}
-		if (!IsBotBeatable)
-		{
-			CPrintToChatAll("%s %sBot Mode changed to %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strBeatableBotMode);
-		}
-		else if (IsBotBeatable)
-		{
-			CPrintToChatAll("%s %sBot Mode changed to %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strUnbeatableBotMode);
-		}
-	}
-}
 
 /*
 **▄▀▀ █▀▀ ▀█▀ █░█ █▀▄
